@@ -1,1 +1,1 @@
-# Computa-o-Comcorrente-Trabalho-de-Implementa-o
+# Computação Comcorrente: Trabalho de Implementação
