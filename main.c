@@ -6,18 +6,17 @@
 #include "timer.h"
 
 
-#define NUMTHREADS_LEITORAS 4
-#define PROCURADA "teste"
-#define NOMEARQUIVO "texto.txt"
 
 
 typedef struct {
     char *nomeArquivo;
+    char *palavraProcurada;
     long int idThread;
 }InformacaoTarefa;
 
+int NUMTHREADS_LEITORAS = 4;
 long long int *posicoesFinais; // Esta variavel vai guardar as posioes em bytes de cada fim de bloco de texto
-
+long long int *posicoesIniciais;
 
 long long int getTamanhoArquivo(FILE *arquivo){
     fseek(arquivo,SEEK_SET,SEEK_END); // manda o ponteiro para arquivo apontar pro fim do arquivo
@@ -29,27 +28,21 @@ long long int getTamanhoArquivo(FILE *arquivo){
 
 
 
+long long int procurarPalavra(FILE *arquivo,long long int pontoInicial, long long int pontoFinal, char *nomeArquivo,char *palavraProcurada){
 
-/*
-    O que faz: Calcula Vai pro proximo bloco,
-
-*/
-
-long long int procurarPalavra(FILE *arquivo,long long int pontoInicial, long long int pontoFinal, char *nomeArquivo){
-
-    char palavra[30];
+    int tamanhoPalavra = 25;
+    char palavra[tamanhoPalavra];
     int numeroDeCaracteres = 0, controle = 0, inicio = 0;
     long long int numeroDeOcorrencias = 0;
 
-    fseek(arquivo,pontoInicial,SEEK_SET); // pula o ponto de arquivo para o ponto inicial de processamento
 
-    while(ftell(arquivo) < pontoFinal -1){ // enquanto eu não passar do limite de leitura.
+    while(ftell(arquivo) < pontoFinal){ // enquanto eu não passar do limite de leitura.
 
         numeroDeCaracteres = fscanf(arquivo,"%s", palavra);
         if(numeroDeCaracteres != 1) break; /* Encerra a verificação no final do arquivo. */
 
         controle = 0;
-        for(int j = 0; j < 30; j++){
+        for(int j = 0; j < tamanhoPalavra; j++){
             if(isalpha(palavra[j]) && controle == 0){
                 inicio = j;
                 controle = 1;
@@ -62,29 +55,26 @@ long long int procurarPalavra(FILE *arquivo,long long int pontoInicial, long lon
         }
 
         /* Verifica se a palavra em questão é a procurada. */
-        if(!strcmp(&palavra[inicio], PROCURADA)){
+        if(!strcmp(palavraProcurada, &palavra[inicio])){
             numeroDeOcorrencias++;
         }
-      
+        else{
+        }
+
     }
    
     return numeroDeOcorrencias;
 
 }
 
+/* Aqui, cada as 4 threads processaram os arquivos*/ 
 void *tarefa(void *arg){
-    //long int id = (long int)  arg;
     InformacaoTarefa *informacaoTarefa = (InformacaoTarefa * ) arg;
 
     long long int pontoInicial, pontoFinal, retorno= 0;
     FILE *arquivo;
-    // thread se situando pra saber por onde ela deve atuar
-    if(informacaoTarefa->idThread == 0){
-        pontoInicial = 0;
-    }else{
-
-        pontoInicial = posicoesFinais[informacaoTarefa->idThread - 1];
-    }
+   
+    pontoInicial = posicoesIniciais[informacaoTarefa->idThread];
     pontoFinal = posicoesFinais[informacaoTarefa->idThread];
 
     arquivo = fopen(informacaoTarefa->nomeArquivo, "r");
@@ -92,22 +82,42 @@ void *tarefa(void *arg){
         puts("Arquivo inexistente!");
         pthread_exit(NULL);
     }
-      
-
+  
+   fseek(arquivo,pontoInicial,SEEK_SET);
     
-    retorno = procurarPalavra(arquivo, pontoInicial, pontoFinal, informacaoTarefa->nomeArquivo);
+    retorno = procurarPalavra(arquivo, pontoInicial, pontoFinal, informacaoTarefa->nomeArquivo,informacaoTarefa->palavraProcurada);
 
     fclose(arquivo);
     pthread_exit((void *) retorno);
 
 }
 
+/*
+    Esta função garante que cada thread começa no próximo espaço em branco a partir do fim da anterior.
+    Assim, sobreposições são evitadas
+*/
+void encontrarPosicoesIniciais(FILE *arquivo, long long int tamanhoArquivo){
+  
+    posicoesIniciais[0] = 0; // a primeira posição...
+    for (int i = 1; i < NUMTHREADS_LEITORAS; i++){ // para cada thread
 
-void encontrarPosicoesFinais(FILE *arquivo){
+        fseek(arquivo, posicoesFinais[i - 1], SEEK_SET); // Pula pra x posicao final anterior
+        long long int offset = 0;
+        while(isalnum(getc(arquivo)) ){ // se o ponto inicial não for espaço em branco
+            offset++; // vai contando a quantidade de bytes pulados pra frente pra encontrar um espaço em branco
+        }
+
+        posicoesIniciais[i] = posicoesFinais[i-1] + offset;
+
+    }
+
+    rewind(arquivo); // reseta o ponteiro de arquivo
+
+}
+
+
+void encontrarPosicoesFinais(FILE *arquivo, long long int tamanhoArquivo){
     long long int tamanhoBloco, fim;
-    long long int tamanhoArquivo;
-
-    tamanhoArquivo = getTamanhoArquivo(arquivo);
     tamanhoBloco = tamanhoArquivo / NUMTHREADS_LEITORAS;
 
     for(int i = 0; i < NUMTHREADS_LEITORAS - 1; i++){ // aqui eu vou fazer os calculos e ver as paradas ae
@@ -115,7 +125,7 @@ void encontrarPosicoesFinais(FILE *arquivo){
         long long int fimSugerido;
         
         if(i == 0){ // se for o primeiro fim...
-            fimSugerido = (tamanhoBloco * i) + tamanhoBloco;
+            fimSugerido = tamanhoBloco;
         }else{ // senao
             fimSugerido = posicoesFinais[i - 1] + tamanhoBloco;
         }
@@ -130,11 +140,11 @@ void encontrarPosicoesFinais(FILE *arquivo){
         fseek(arquivo, fim, SEEK_SET); // coloco o ponteiro pra arquivo "apontar pra aquele fim"
         
         long long int offset = 0;
-        while(isalnum(getc(arquivo)) ){ // se nao for espaço em branco
+        while(isalnum(getc(arquivo)) ){ // se o ponto de parada não for espaço em branco
             offset++; // vai contando a quantidade de bytes pulados pra frente pra encontrar um espaço em branco
         }
 
-        posicoesFinais[i] = fim + offset;
+        posicoesFinais[i] = fim + offset + 1;
     }
 
     posicoesFinais[NUMTHREADS_LEITORAS - 1] = tamanhoArquivo; // coloca o ultimo fim na ultima posicao do vetor
@@ -142,17 +152,44 @@ void encontrarPosicoesFinais(FILE *arquivo){
 }
 
 
+char *strToLower(char *str)
+{
+  unsigned char *charAtual = (unsigned char *)str;
+
+  while (*charAtual) { // enquanto nao chegou no fim do arquivo
+     *charAtual = tolower((unsigned char)*charAtual);
+      charAtual++; // avança
+  }
+
+  return str;
+}
 
 int main(int argc, char *argv[]){
-
-    char *nomeArquivo = NOMEARQUIVO;
-    FILE *arquivo = fopen(nomeArquivo, "r");
 
     pthread_t *identificadores;
     InformacaoTarefa *argumentos;
 
-    long long int retorno, somaQuantidadeOcorrencias = 0;
+    long long int retorno, tamanhoArquivo = 0, somaQuantidadeOcorrencias = 0;
     double inicio, fim, tempo;
+    char *nomeArquivo, *palavraProcurada;
+    if(argc < 3){
+        puts("Digite: ./mainConcorrentePonteiro <NomeArquivo> <Palavra Procurada>");
+        puts("Ou");
+        puts("Digite: ./mainConcorrentePonteiro <NomeArquivo> <Palavra Procurada> <Numthreds>");
+        return EXIT_FAILURE;
+    }
+
+    nomeArquivo = argv[1];
+    palavraProcurada = argv[2];
+    if(argc > 4){ // Se um número de threads for fornecido...
+        NUMTHREADS_LEITORAS = atoi(argv[3]);
+    }
+    
+    // transforma todos os caracteres da palavra procurada em minusculo...
+    palavraProcurada = strToLower(palavraProcurada);
+
+    FILE *arquivo = fopen(nomeArquivo, "r");
+
 
     if(arquivo == NULL){
         puts("Arquivo não existe!");
@@ -173,14 +210,24 @@ int main(int argc, char *argv[]){
         return EXIT_FAILURE;
     }
 
-    // alocando espaço para vetor de posições
+    // alocando espaço para vetor de posições iniciais
+
+    posicoesIniciais = (long long int *) malloc(NUMTHREADS_LEITORAS * sizeof(long long int));
+    if(posicoesIniciais == NULL){
+        puts("Erro ao alocar espaço para as posições iniciais de leitura.");
+        return EXIT_FAILURE;
+    }
+
+    // alocando espaço para vetor de posições finais
     posicoesFinais = (long long int *) malloc(NUMTHREADS_LEITORAS * sizeof(long long int));
     if(posicoesFinais == NULL){
         puts("Erro ao alocar espaço para as posições finais de leitura.");
         return EXIT_FAILURE;
     }
+    tamanhoArquivo = getTamanhoArquivo(arquivo);
+    encontrarPosicoesFinais(arquivo, tamanhoArquivo); // marca as posições finais(limites) de cada thread 
+    encontrarPosicoesIniciais(arquivo,tamanhoArquivo); // marca as posições iniciais de atuação de cada thread
 
-    encontrarPosicoesFinais(arquivo); // marca as posições finais(limites) de cada thread 
     fclose(arquivo); // fechando o arquivo, ja que cada thread vai abrir uma instancia propria do arquivo
 
     GET_TIME(inicio);
@@ -188,6 +235,7 @@ int main(int argc, char *argv[]){
     for(long int i = 0; i < NUMTHREADS_LEITORAS; i++){
 
         argumentos[i].nomeArquivo = nomeArquivo;
+        argumentos[i].palavraProcurada = palavraProcurada;
         argumentos[i].idThread = i;
 
 
@@ -207,17 +255,18 @@ int main(int argc, char *argv[]){
         somaQuantidadeOcorrencias += retorno;
     }
 
-    printf("\n\nA palavra '%s' aparece %lld vezes em '%s'\n", PROCURADA, somaQuantidadeOcorrencias, nomeArquivo);
-
-
     GET_TIME(fim);
 
     tempo = fim - inicio;
 
-    printf("\nTempo de execução: %lf Segundos\n", tempo);
-   
+    printf("\nNome do arquivo utilizado: \"%s\"\n",nomeArquivo);
+    printf("Número de ocorrencias da palavra \"%s\": %lld\n",palavraProcurada, somaQuantidadeOcorrencias);
+    printf("Tempo gasto na busca: %lf Segundos\n\n", tempo);
+  
 
+    free(posicoesIniciais);
     free(posicoesFinais);
+
     pthread_exit(NULL);
 
     return EXIT_SUCCESS;
